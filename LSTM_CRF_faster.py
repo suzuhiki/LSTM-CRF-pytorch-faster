@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from tqdm import tqdm
 START_TAG = "<START>"
 STOP_TAG = "<STOP>"
 EMBEDDING_DIM = 5
@@ -169,8 +170,8 @@ if __name__== '__main__':
         print(model(precheck_sent))
 
     # Make sure prepare_sequence from earlier in the LSTM section is loaded
-    for epoch in range(
-            300):  # again, normally you would NOT do 300 epochs, it is toy data
+    for epoch in tqdm(range(
+            100)):  # again, normally you would NOT do 300 epochs, it is toy data
         for sentence, tags in training_data:
             # Step 1. Remember that Pytorch accumulates gradients.
             # We need to clear them out before each instance
