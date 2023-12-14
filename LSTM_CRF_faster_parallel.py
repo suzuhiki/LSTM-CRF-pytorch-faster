@@ -81,62 +81,6 @@ class BiLSTM_CRF_MODIFY_PARALLEL(nn.Module):
         return (torch.randn(2, 1, self.hidden_dim // 2),
                 torch.randn(2, 1, self.hidden_dim // 2))
 
-    def _forward_alg(self, feats):
-        begin = time.time()
-        # Do the forward algorithm to compute the partition function
-        init_alphas = torch.full((1, self.tagset_size), -10000.).to('cuda')
-        # START_TAG has all of the score.
-        init_alphas[0][self.tag_to_ix[START_TAG]] = 0.
-
-        # Wrap in a variable so that we will get automatic backprop
-        forward_var = init_alphas
-        # print('time consuming of crf_partion_function_prepare:%f' % (time.time() - begin))
-        begin = time.time()
-        # Iterate through the sentence
-        for feat in feats:
-            alphas_t = []  # The forward tensors at this timestep
-            for next_tag in range(self.tagset_size):
-                # broadcast the emission score: it is the same regardless of
-                # the previous tag
-                emit_score = feat[next_tag].view(
-                    1, -1).expand(1, self.tagset_size)
-                # the ith entry of trans_score is the score of transitioning to
-                # next_tag from i
-                trans_score = self.transitions[next_tag].view(1, -1)
-                # The ith entry of next_tag_var is the value for the
-                # edge (i -> next_tag) before we do log-sum-exp
-                next_tag_var = (forward_var + trans_score + emit_score)
-                # The forward variable for this tag is log-sum-exp of all the
-                # scores.
-                alphas_t.append(log_sum_exp(next_tag_var).view(1))
-            forward_var = torch.cat(alphas_t).view(1, -1)
-        # print('time consuming of crf_partion_function1:%f' % (time.time() - begin))
-        terminal_var = forward_var + self.transitions[self.tag_to_ix[STOP_TAG]]
-        alpha = log_sum_exp(terminal_var)
-        # print('time consuming of crf_partion_function2:%f' %(time.time()-begin))
-        return alpha
-
-    def _forward_alg_new(self, feats):
-        # Do the forward algorithm to compute the partition function
-        init_alphas = torch.full([self.tagset_size], -10000.).to('cuda')
-        # START_TAG has all of the score.
-        init_alphas[self.tag_to_ix[START_TAG]] = 0.
-
-        # Wrap in a variable so that we will get automatic backprop
-        # Iterate through the sentence
-        forward_var_list = []
-        forward_var_list.append(init_alphas)
-        for feat_index in range(feats.shape[0]):  # -1
-            gamar_r_l = torch.stack([forward_var_list[feat_index]] * feats.shape[1])
-            # gamar_r_l = torch.transpose(gamar_r_l,0,1)
-            t_r1_k = torch.unsqueeze(feats[feat_index], 0).transpose(0, 1)  # +1
-            aa = gamar_r_l + t_r1_k + self.transitions
-            # forward_var_list.append(log_add(aa))
-            forward_var_list.append(torch.logsumexp(aa, dim=1))
-        terminal_var = forward_var_list[-1] + self.transitions[self.tag_to_ix[STOP_TAG]]
-        terminal_var = torch.unsqueeze(terminal_var, 0)
-        alpha = torch.logsumexp(terminal_var, dim=1)[0]
-        return alpha
 
     def _forward_alg_new_parallel(self, feats):
         # Do the forward algorithm to compute the partition function
@@ -179,21 +123,6 @@ class BiLSTM_CRF_MODIFY_PARALLEL(nn.Module):
         lstm_feats = self.hidden2tag(lstm_out)
         return lstm_feats
 
-    def _score_sentence(self, feats, tags):
-        # Gives the score of a provided tag sequence
-        score = torch.zeros(1)
-        # score = autograd.Variable(torch.Tensor([0])).to('cuda')
-        tags = torch.cat([torch.tensor([self.tag_to_ix[START_TAG]], dtype=torch.long), tags.view(-1)])
-
-        # if len(tags)<2:
-        #     print(tags)
-        #     sys.exit(0)
-        for i, feat in enumerate(feats):
-            score = score + \
-                    self.transitions[tags[i + 1], tags[i]] + feat[tags[i + 1]]
-        score = score + self.transitions[self.tag_to_ix[STOP_TAG], tags[-1]]
-        return score
-
     def _score_sentence_parallel(self, feats, tags):
         # Gives the score of provided tag sequences
         #feats = feats.transpose(0,1)
@@ -206,7 +135,6 @@ class BiLSTM_CRF_MODIFY_PARALLEL(nn.Module):
                     self.transitions[tags[:,i + 1], tags[:,i]] + feat[range(feat.shape[0]),tags[:,i + 1]]
         score = score + self.transitions[self.tag_to_ix[STOP_TAG], tags[:,-1]]
         return score
-
 
 
     def _viterbi_decode(self, feats):
@@ -293,12 +221,6 @@ class BiLSTM_CRF_MODIFY_PARALLEL(nn.Module):
         assert start == self.tag_to_ix[START_TAG]  # Sanity check
         best_path.reverse()
         return path_score, best_path
-
-    def neg_log_likelihood(self, sentence, tags):
-        feats = self._get_lstm_features(sentence)
-        forward_score = self._forward_alg_new(feats)
-        gold_score = self._score_sentence(feats, tags)[0]
-        return forward_score - gold_score
 
     def neg_log_likelihood_parallel(self, sentences, tags):
         feats = self._get_lstm_features_parallel(sentences)
